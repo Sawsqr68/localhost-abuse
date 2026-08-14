@@ -264,3 +264,144 @@
     </script>
 </body>
 </html>
+// Helper utilities (use const/let, modular functions, async/await)
+const state = {
+  randomNumber: null,
+  ws: null
+};
+
+function generateNumber() {
+  // Use crypto for better randomness
+  const arr = new Uint32Array(1);
+  window.crypto.getRandomValues(arr);
+  state.randomNumber = 1000 + (arr[0] % 9000);
+  document.getElementById('random-number').innerText = state.randomNumber;
+  // enable action buttons if you want
+}
+
+function ensureNumber() {
+  if (!state.randomNumber) {
+    alert('Please generate a random number first.');
+    return false;
+  }
+  return true;
+}
+
+function validateHostInput(raw) {
+  // Accept host[:port] and simple hostnames; avoid adding protocol here.
+  if (!raw || !raw.trim()) throw new Error('Empty host');
+  // Basic validation: remove dangerous characters
+  if (/[\s<>#%{}|\^~\[\]`]/.test(raw)) throw new Error('Invalid characters in host.');
+  return raw.trim();
+}
+
+function buildUrl(rawHost, protocol = 'http', path = '/send', params = null) {
+  // normalize host and build a proper URL object
+  // allow input with or without port (localhost:5000)
+  const host = validateHostInput(rawHost);
+  const prefix = `${protocol}://${host}`;
+  // Use URL to ensure correct encoding
+  const url = new URL(path, prefix);
+  if (params) {
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  }
+  return url.toString();
+}
+
+async function sendHttpGeneric(rawHost, method = 'POST', protocol = 'http', payload = {}) {
+  if (!ensureNumber()) return;
+  try {
+    const url = method === 'GET'
+      ? buildUrl(rawHost, protocol, '/send', { number: `${method}Request${state.randomNumber}` })
+      : buildUrl(rawHost, protocol, '/send');
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    const options = {
+      method,
+      signal: controller.signal,
+      headers: method === 'POST' ? { 'Content-Type': 'application/json' } : undefined,
+      body: method === 'POST' ? JSON.stringify({ number: `${method}Request${state.randomNumber}` }) : undefined
+    };
+
+    const res = await fetch(url, options);
+    clearTimeout(timeout);
+    const text = await res.text();
+    return text;
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('Request timed out');
+    throw err;
+  }
+}
+
+// Usage wrappers for UI
+async function sendHttpRequest() {
+  const raw = document.getElementById('http_url').value;
+  const method = document.getElementById('http_method').value;
+  try {
+    const resText = await sendHttpGeneric(raw, method, 'http');
+    document.getElementById('http_response').innerText = resText;
+  } catch (err) {
+    document.getElementById('http_response').innerText = `Error: ${err.message}`;
+    console.error(err);
+  }
+}
+
+async function sendHttpsRequest() {
+  const raw = document.getElementById('https_url').value;
+  const method = document.getElementById('https_method').value;
+  try {
+    const resText = await sendHttpGeneric(raw, method, 'https');
+    document.getElementById('https_response').innerText = resText;
+  } catch (err) {
+    document.getElementById('https_response').innerText = `Error: ${err.message}`;
+    console.error(err);
+  }
+}
+
+// WebSocket helpers (detect wss if page is https)
+function getWsScheme() {
+  return location.protocol === 'https:' ? 'wss' : 'ws';
+}
+
+function sendWebSocket() {
+  const url = document.getElementById('ws_url').value;
+  if (!url) { alert('Enter URL first!'); return; }
+  if (!ensureNumber()) return;
+
+  const scheme = getWsScheme();
+  // Prevent multiple connections
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ number: `sendWebSocket${state.randomNumber}` }));
+    return;
+  }
+
+  try {
+    const full = `${scheme}://${validateHostInput(url)}/ws`;
+    state.ws = new WebSocket(full);
+
+    state.ws.addEventListener('open', () => {
+      document.getElementById('ws_response').innerText = 'Connected — sending...';
+      state.ws.send(JSON.stringify({ number: `sendWebSocket${state.randomNumber}` }));
+    });
+    state.ws.addEventListener('message', (ev) => {
+      document.getElementById('ws_response').innerText = ev.data;
+    });
+    state.ws.addEventListener('error', (ev) => {
+      document.getElementById('ws_response').innerText = 'WebSocket error';
+      console.error(ev);
+    });
+    state.ws.addEventListener('close', () => {
+      // reflect closed state in UI
+      document.getElementById('ws_response').innerText = 'Closed';
+    });
+  } catch (err) {
+    document.getElementById('ws_response').innerText = `Error: ${err.message}`;
+  }
+}
+
+// cleanup on unload
+window.addEventListener('beforeunload', () => {
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.close();
+});
